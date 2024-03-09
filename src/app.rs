@@ -1,4 +1,4 @@
-use std::{env, fs::File, io::BufWriter};
+use std::{env, fs::File, io::BufWriter, path::PathBuf};
 
 use egui::{FontFamily, FontId, TextStyle, Vec2};
 use rfd::FileDialog;
@@ -11,6 +11,8 @@ pub struct BingoSyncGen {
 
     #[serde(skip)]
     generated: String,
+
+    save_path: PathBuf,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -23,6 +25,7 @@ impl Default for BingoSyncGen {
         Self {
             board: core::array::from_fn(|idx| Box::new(String::from(""))),
             generated: String::from(""),
+            save_path: env::current_dir().unwrap()
         }
     }
 }
@@ -63,10 +66,6 @@ impl BingoSyncGen {
 }
 
 impl eframe::App for BingoSyncGen {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, eframe::APP_KEY, self);
-    }
-
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.generated = serde_json::to_string_pretty(&self.board.clone().map(|item| Card {
             name: *item.to_owned(),
@@ -78,8 +77,8 @@ impl eframe::App for BingoSyncGen {
                 ui.menu_button("File", |ui| {
                     if ui.button("Save").clicked() {
                         let save_path = FileDialog::new()
-                            .add_filter("output", &["txt", "json"])
-                            .set_directory(env::current_dir().unwrap())
+                            .add_filter("Text File/JSON File", &["txt", "json"])
+                            .set_directory(&self.save_path)
                             .save_file();
                         if let Some(path) = save_path {
                             let file = File::create(path).unwrap();
@@ -127,8 +126,8 @@ impl eframe::App for BingoSyncGen {
                     ui.label("Generated");
                     if ui.button("Save").clicked() {
                         let save_path = FileDialog::new()
-                            .add_filter("output", &["txt", "json"])
-                            .set_directory(env::current_dir().unwrap())
+                            .add_filter("Text File/JSON File", &["txt", "json"])
+                            .set_directory(&self.save_path)
                             .save_file();
                         if let Some(path) = save_path {
                             let file = File::create(path).unwrap();
