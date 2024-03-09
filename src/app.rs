@@ -68,7 +68,7 @@ impl eframe::App for BingoSyncGen {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.generated = serde_json::to_string(&self.board.clone().map(|item| Card {
+        self.generated = serde_json::to_string_pretty(&self.board.clone().map(|item| Card {
             name: *item.to_owned(),
         }))
         .unwrap();
@@ -144,10 +144,12 @@ impl eframe::App for BingoSyncGen {
                     }
                 });
 
-                ui.add_sized(
-                    ui.available_size(),
-                    egui::TextEdit::multiline(&mut self.generated).font(TextStyle::Monospace),
-                );
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add_sized(
+                        ui.available_size(),
+                        egui::TextEdit::multiline(&mut self.generated).font(TextStyle::Monospace),
+                    );
+                });
             });
 
             ui.separator();
