@@ -1,4 +1,31 @@
-use std::{borrow::Cow, env, fs::File, io::BufWriter, path::PathBuf};
+//! Do I care that the code is mess? Kinda no.
+//! Do I care that the code is barely readable? Also no.
+//! I do kinda know that I did mess around here and it could be done more efficiently.
+//! Would I be willing to get help? Yes.
+
+use itertools::Itertools;
+use polars::{
+    datatypes::{AnyValue, DataType},
+    df,
+    io::{
+        csv::{CsvReader, CsvWriter},
+        SerReader, SerWriter,
+    },
+    prelude::Schema,
+};
+use rand::{
+    seq::{IteratorRandom, SliceRandom},
+    thread_rng,
+};
+use std::{
+    borrow::Cow,
+    env, fmt,
+    fs::File,
+    io::{BufReader, BufWriter},
+    path::PathBuf,
+    sync::Arc,
+};
+use weighted_rand::builder::*;
 
 use egui::{FontFamily, FontId, TextStyle, Vec2};
 use egui_data_table::RowViewer;
@@ -16,6 +43,25 @@ impl Default for MainPanel {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum FieldSize {
+    Three = 3,
+    Four,
+    Five,
+}
+
+impl Default for FieldSize {
+    fn default() -> Self {
+        Self::Five
+    }
+}
+
+impl fmt::Display for FieldSize {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "{:?}", self)
+    }
+}
+
 struct CardViewer {
     filter: String,
 }
@@ -29,7 +75,7 @@ impl Default for CardViewer {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-struct CardRow(String, String, f32, bool);
+struct CardRow(String, String, f64, bool);
 
 impl RowViewer<CardRow> for CardViewer {
     fn num_columns(&mut self) -> usize {
@@ -49,7 +95,7 @@ impl RowViewer<CardRow> for CardViewer {
             match column {
                 0 => row_l.0.cmp(&row_r.0),
                 1 => row_l.1.cmp(&row_r.1),
-                2 => row_l.2.total_cmp(&row_r.2),
+                2 => row_l.2.partial_cmp(&row_r.2).unwrap(),
                 3 => unreachable!(),
                 _ => unreachable!(),
             }
@@ -59,7 +105,7 @@ impl RowViewer<CardRow> for CardViewer {
     }
 
     fn new_empty_row(&mut self) -> CardRow {
-        CardRow(String::from(""), String::from(""), 1.0, true)
+        CardRow(String::from(""), String::from(""), 1.0_f64, true)
     }
 
     fn set_cell_value(&mut self, src: &CardRow, dst: &mut CardRow, column: usize) {
@@ -107,7 +153,7 @@ impl RowViewer<CardRow> for CardViewer {
             2 => ui.add(
                 egui::DragValue::new(&mut row.2)
                     .clamp_range(0.0..=255.0)
-                    .speed(0.1),
+                    .speed(1.0),
             ),
             3 => ui.checkbox(&mut row.3, ""),
             _ => unreachable!(),
@@ -128,17 +174,13 @@ pub struct BingoSyncGen {
     #[serde(skip)]
     generated: String,
 
-    #[serde(skip)]
     save_path: PathBuf,
 
     #[serde(skip)]
-    category_edit: String,
-
-    #[serde(skip)]
-    card_edit: String,
-
-    #[serde(skip)]
     category_select: String,
+
+    #[serde(skip)]
+    field_size: FieldSize,
 
     card_table_data: Vec<CardRow>,
 
@@ -147,6 +189,9 @@ pub struct BingoSyncGen {
 
     #[serde(skip)]
     card_viewer: CardViewer,
+
+    #[serde(skip)]
+    data_schema: Schema,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -156,17 +201,24 @@ struct Card {
 
 impl Default for BingoSyncGen {
     fn default() -> Self {
+        let mut schema = Schema::new();
+
+        schema.with_column("category".into(), DataType::String);
+        schema.with_column("text".into(), DataType::String);
+        schema.with_column("weight".into(), DataType::Float64);
+        schema.with_column("enabled".into(), DataType::Boolean);
+
         Self {
             selected_panel: MainPanel::default(),
             board: core::array::from_fn(|_idx| Box::new(String::from(""))),
             generated: String::from(""),
             save_path: env::current_dir().unwrap(),
-            category_edit: String::from(""),
-            card_edit: String::from(""),
-            category_select: String::from(""),
+            category_select: String::from("All"),
+            field_size: FieldSize::default(),
             card_table_data: Default::default(),
             card_table: Default::default(),
             card_viewer: CardViewer::default(),
+            data_schema: schema,
         }
     }
 }
@@ -234,10 +286,19 @@ impl eframe::App for BingoSyncGen {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if self.selected_panel == MainPanel::Board {
+                        if ui.button("Clear Board").clicked() {
+                            for i in 0..self.board.len() {
+                                *self.board[i] = "".to_owned();
+                            }
+                            ui.close_menu();
+                        }
+                    }
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
+
                 ui.add_space(16.0);
 
                 ui.horizontal(|ui| {
@@ -290,6 +351,206 @@ impl eframe::App for BingoSyncGen {
                                     .unwrap();
                                 }
                             }
+
+                            ui.label("Category".to_owned());
+
+                            egui::ComboBox::from_id_source("category_select")
+                                .selected_text(self.category_select.to_owned())
+                                .show_ui(ui, |ui| {
+                                    for item in [
+                                        vec![String::from("All")],
+                                        self.card_table
+                                            .iter()
+                                            .map(|item| item.0.to_owned())
+                                            .collect::<Vec<String>>()
+                                            .iter()
+                                            .unique()
+                                            .map(|item| item.to_owned())
+                                            .collect::<Vec<String>>(),
+                                    ]
+                                    .concat()
+                                    {
+                                        ui.selectable_value(
+                                            &mut self.category_select,
+                                            item.to_owned(),
+                                            item.to_owned(),
+                                        );
+                                    }
+                                });
+
+                            egui::ComboBox::from_id_source("field_select")
+                                .selected_text(match self.field_size {
+                                    FieldSize::Three => String::from("3x3"),
+                                    FieldSize::Four => String::from("4x4"),
+                                    FieldSize::Five => String::from("5x5"),
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.field_size,
+                                        FieldSize::Three,
+                                        "3x3",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.field_size,
+                                        FieldSize::Four,
+                                        "4x4",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.field_size,
+                                        FieldSize::Five,
+                                        "5x5",
+                                    );
+                                });
+
+                            if ui.button("Randomize").clicked() {
+                                for i in 0..self.board.len() {
+                                    *self.board[i] = "".to_owned();
+                                }
+
+                                let items_iter = self.card_table.iter();
+                                let mut rng = thread_rng();
+                                let mut samples: Option<Vec<&CardRow>> = None;
+
+                                if self.category_select.ne("All") {
+                                    samples = items_iter
+                                        .filter(|i| {
+                                            i.0.to_owned().eq(&self.category_select.to_owned())
+                                                && i.3
+                                        })
+                                        .choose_multiple(
+                                            &mut rng,
+                                            self.field_size as usize * self.field_size as usize,
+                                        )
+                                        .into();
+                                } else {
+                                    samples = items_iter
+                                        .filter(|i| i.3)
+                                        .choose_multiple(
+                                            &mut rng,
+                                            self.field_size as usize * self.field_size as usize,
+                                        )
+                                        .into();
+                                }
+
+                                let mut result: Vec<&CardRow> =
+                                    samples.as_slice().first().unwrap().to_owned();
+                                result.shuffle(&mut rng);
+
+                                match self.field_size {
+                                    FieldSize::Three => {
+                                        let mut consume = result.iter();
+                                        for c in 1..=3 {
+                                            for r in 1..=3 {
+                                                *self.board[c * 5 + r] =
+                                                    consume.next().unwrap().1.to_owned();
+                                            }
+                                        }
+                                    }
+                                    FieldSize::Four => {
+                                        let mut consume = result.iter();
+                                        for c in 0..=3 {
+                                            for r in 0..=3 {
+                                                *self.board[c * 5 + r] =
+                                                    consume.next().unwrap().1.to_owned();
+                                            }
+                                        }
+                                    }
+                                    FieldSize::Five => {
+                                        for (idx, s) in result.iter().enumerate() {
+                                            *self.board[idx] = s.1.to_owned();
+                                        }
+                                    }
+                                }
+                            }
+                            if ui.button("W. Randomize").clicked() {
+                                for i in 0..self.board.len() {
+                                    *self.board[i] = "".to_owned();
+                                }
+
+                                let items_iter = self.card_table.iter();
+                                let mut rng = thread_rng();
+                                let mut samples: Option<Vec<&CardRow>> = None;
+
+                                if self.category_select.ne("All") {
+                                    samples = items_iter
+                                        .filter(|i| {
+                                            i.0.to_owned().eq(&self.category_select.to_owned())
+                                                && i.3
+                                        })
+                                        .collect::<Vec<&CardRow>>()
+                                        .into();
+                                } else {
+                                    samples = items_iter
+                                        .filter(|i| i.3)
+                                        .collect::<Vec<&CardRow>>()
+                                        .into();
+                                }
+
+                                let result = samples.unwrap();
+                                let builder = WalkerTableBuilder::new(
+                                    &result
+                                        .clone()
+                                        .iter()
+                                        .map(|item| item.2 as f32 / 100.0)
+                                        .collect::<Vec<f32>>(),
+                                );
+                                let wa_table = builder.build();
+                                let mut visited: Vec<usize> = vec![];
+
+                                match self.field_size {
+                                    FieldSize::Three => {
+                                        for c in 1..=3 {
+                                            for r in 1..=3 {
+                                                while let idx = wa_table.next_rng(&mut rng) {
+                                                    if visited.contains(&idx) {
+                                                        continue;
+                                                    }
+
+                                                    visited.push(idx);
+
+                                                    *self.board[c * 5 + r] =
+                                                        result[idx].1.to_owned();
+
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    FieldSize::Four => {
+                                        for c in 0..=3 {
+                                            for r in 0..=3 {
+                                                while let idx = wa_table.next_rng(&mut rng) {
+                                                    if visited.contains(&idx) {
+                                                        continue;
+                                                    }
+
+                                                    visited.push(idx);
+
+                                                    *self.board[c * 5 + r] =
+                                                        result[idx].1.to_owned();
+
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    FieldSize::Five => {
+                                        for e_idx in (0..25) {
+                                            while let idx = wa_table.next_rng(&mut rng) {
+                                                if visited.contains(&idx) {
+                                                    continue;
+                                                }
+
+                                                visited.push(idx);
+
+                                                *self.board[e_idx] = result[idx].1.to_owned();
+
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         });
 
                         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -307,6 +568,149 @@ impl eframe::App for BingoSyncGen {
                         ui.text_edit_singleline(&mut self.card_viewer.filter);
                         if ui.button("Add Row").clicked() {
                             self.card_table.extend([self.card_viewer.new_empty_row()]);
+                        }
+                        if ui.button("Import Add").clicked() {
+                            let save_path = FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .set_directory(&self.save_path)
+                                .pick_file();
+
+                            if let Some(path) = save_path {
+                                let file = File::open(path).unwrap();
+                                let reader = BufReader::new(file);
+                                let mut dataset = CsvReader::new(reader)
+                                    .has_header(true)
+                                    .with_dtypes(Some(Arc::new(self.data_schema.clone())))
+                                    .finish()
+                                    .unwrap();
+                                dataset.as_single_chunk_par();
+                                let mut iters =
+                                    dataset.iter().map(|s| s.iter()).collect::<Vec<_>>();
+
+                                let mut data: Vec<CardRow> = Vec::new();
+
+                                for row in 0..dataset.height() {
+                                    let mut collector: Vec<AnyValue> = Vec::new();
+                                    for iter in &mut iters {
+                                        collector.push(iter.next().unwrap());
+                                    }
+                                    data.push(CardRow {
+                                        0: if let AnyValue::String(v) = collector[0] {
+                                            String::from(v)
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                        1: if let AnyValue::String(v) = collector[1] {
+                                            String::from(v)
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                        2: if let AnyValue::Float64(v) = collector[2] {
+                                            v
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                        3: if let AnyValue::Boolean(v) = collector[3] {
+                                            v
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                    })
+                                }
+
+                                self.card_table.extend(data);
+                            }
+                        }
+                        if ui.button("Import").clicked() {
+                            let save_path = FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .set_directory(&self.save_path)
+                                .pick_file();
+
+                            if let Some(path) = save_path {
+                                let file = File::open(path).unwrap();
+                                let reader = BufReader::new(file);
+                                let mut dataset = CsvReader::new(reader)
+                                    .has_header(true)
+                                    .with_dtypes(Some(Arc::new(self.data_schema.clone())))
+                                    .finish()
+                                    .unwrap();
+                                dataset.as_single_chunk_par();
+                                let mut iters =
+                                    dataset.iter().map(|s| s.iter()).collect::<Vec<_>>();
+
+                                let mut data: Vec<CardRow> = Vec::new();
+
+                                for row in 0..dataset.height() {
+                                    let mut collector: Vec<AnyValue> = Vec::new();
+                                    for iter in &mut iters {
+                                        collector.push(iter.next().unwrap());
+                                    }
+                                    data.push(CardRow {
+                                        0: if let AnyValue::String(v) = collector[0] {
+                                            String::from(v)
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                        1: if let AnyValue::String(v) = collector[1] {
+                                            String::from(v)
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                        2: if let AnyValue::Float64(v) = collector[2] {
+                                            v
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                        3: if let AnyValue::Boolean(v) = collector[3] {
+                                            v
+                                        } else {
+                                            panic!("panik!");
+                                        },
+                                    })
+                                }
+
+                                self.card_table.replace(data);
+                            }
+                        }
+                        if ui.button("Export").clicked() {
+                            let save_path = FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .set_directory(&self.save_path)
+                                .save_file();
+
+                            if let Some(path) = save_path {
+                                let mut file = File::create(path).unwrap();
+
+                                {
+                                    let categories: Vec<String> = self
+                                        .card_table
+                                        .iter()
+                                        .map(|item| item.0.to_owned())
+                                        .collect();
+                                    let texts: Vec<String> = self
+                                        .card_table
+                                        .iter()
+                                        .map(|item| item.1.to_owned())
+                                        .collect();
+                                    let weights: Vec<f64> =
+                                        self.card_table.iter().map(|item| item.2).collect();
+                                    let enables: Vec<bool> =
+                                        self.card_table.iter().map(|item| item.3).collect();
+
+                                    CsvWriter::new(&mut file)
+                                        .finish(
+                                            &mut df!(
+                                                "category" => &categories,
+                                                "text" => &texts,
+                                                "weight" => &weights,
+                                                "enabled" => &enables
+                                            )
+                                            .unwrap(),
+                                        )
+                                        .unwrap();
+                                }
+                            }
                         }
                     });
 

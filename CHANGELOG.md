@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning].
 ### Added
 
 - `Panel`s for switching between Bingo Board and Database
+- Import CSV
+- Append data from CSV
+- Export to CSV
+- Randomize
+- Weighted Randomize
 
 ### Changed
 

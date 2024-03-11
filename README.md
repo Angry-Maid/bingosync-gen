@@ -4,7 +4,7 @@ Configured to do a buildout to native (Windows/MacOS), not on WASM
 
 ![images/app.png](images/app.png)
 
-## Planned features
-- [ ] Card Database Browser with full CRUD support
-- [ ] Card Categories
-- [ ] Bingo generator from Card Database
+## Planned/completed features
+- [x] Card Database Browser
+- [x] Bingo generator from Card Database
+- [x] Import/Export CSV
