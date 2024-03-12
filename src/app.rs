@@ -69,7 +69,7 @@ struct CardRow(
     #[serde(rename = "category")] String,
     #[serde(rename = "text")] String,
     #[serde(rename = "weight")] f64,
-    #[serde(rename = "enabledF")] bool,
+    #[serde(rename = "enabled")] bool,
 );
 
 impl RowViewer<CardRow> for CardViewer {
