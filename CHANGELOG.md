@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning].
 
 - /
 
+
+## [0.2.2] - 2024-03-12
+
+### Added
+
+- Feedback on some of the `Randomize` errors
+
+
 ## [0.2.1] - 2024-03-12
 
 ### Changed
@@ -41,7 +49,8 @@ and this project adheres to [Semantic Versioning].
 [semantic versioning]: https://semver.org/spec/v2.0.0.html
 
 <!-- Versions -->
-[unreleased]: https://github.com/Angry-Maid/bingosync-gen/compare/v0.2.1...HEAD
+[unreleased]: https://github.com/Angry-Maid/bingosync-gen/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Angry-Maid/bingosync-gen/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Angry-Maid/bingosync-gen/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Angry-Maid/bingosync-gen/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Angry-Maid/bingosync-gen/releases/tag/v0.1.0

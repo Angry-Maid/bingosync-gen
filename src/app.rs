@@ -14,11 +14,13 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter},
     path::PathBuf,
+    time::Duration,
 };
 use weighted_rand::builder::*;
 
 use egui::{FontFamily, FontId, TextStyle, Vec2};
 use egui_data_table::RowViewer;
+use egui_notify::{Anchor, Toast, Toasts};
 use rfd::FileDialog;
 
 #[derive(PartialEq, Eq)]
@@ -169,6 +171,10 @@ pub struct BingoSyncGen {
     #[serde(skip)]
     generated: String,
 
+    #[serde(skip)]
+    toasts: Toasts,
+
+    #[serde(skip)]
     save_path: PathBuf,
 
     #[serde(skip)]
@@ -197,6 +203,7 @@ impl Default for BingoSyncGen {
             selected_panel: MainPanel::default(),
             board: core::array::from_fn(|_idx| Box::new(String::from(""))),
             generated: String::from(""),
+            toasts: Toasts::default().with_anchor(Anchor::BottomRight),
             save_path: env::current_dir().unwrap(),
             category_select: String::from("All"),
             field_size: FieldSize::default(),
@@ -262,6 +269,11 @@ impl eframe::App for BingoSyncGen {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let toast_cb = |t: &mut Toast| {
+            t.set_closable(true)
+                .set_duration(Some(Duration::from_millis((1000. * 3.5) as u64)));
+        };
+
         self.generated = serde_json::to_string_pretty(&self.board.clone().map(|item| BingoCard {
             name: *item.to_owned(),
         }))
@@ -416,34 +428,41 @@ impl eframe::App for BingoSyncGen {
                                         .into();
                                 }
 
-                                let mut result: Vec<&CardRow> =
-                                    samples.as_slice().first().unwrap().to_owned();
-                                result.shuffle(&mut rng);
+                                let mut result: Vec<&CardRow> = samples.unwrap();
 
-                                match self.field_size {
-                                    FieldSize::Three => {
-                                        let mut consume = result.iter();
-                                        for c in 1..=3 {
-                                            for r in 1..=3 {
-                                                *self.board[c * 5 + r] =
-                                                    consume.next().unwrap().1.to_owned();
+                                if result.len()
+                                    >= (self.field_size as usize * self.field_size as usize)
+                                {
+                                    result.shuffle(&mut rng);
+
+                                    match self.field_size {
+                                        FieldSize::Three => {
+                                            let mut consume = result.iter();
+                                            for c in 1..=3 {
+                                                for r in 1..=3 {
+                                                    *self.board[c * 5 + r] =
+                                                        consume.next().unwrap().1.to_owned();
+                                                }
+                                            }
+                                        }
+                                        FieldSize::Four => {
+                                            let mut consume = result.iter();
+                                            for c in 0..=3 {
+                                                for r in 0..=3 {
+                                                    *self.board[c * 5 + r] =
+                                                        consume.next().unwrap().1.to_owned();
+                                                }
+                                            }
+                                        }
+                                        FieldSize::Five => {
+                                            for (idx, s) in result.iter().enumerate() {
+                                                *self.board[idx] = s.1.to_owned();
                                             }
                                         }
                                     }
-                                    FieldSize::Four => {
-                                        let mut consume = result.iter();
-                                        for c in 0..=3 {
-                                            for r in 0..=3 {
-                                                *self.board[c * 5 + r] =
-                                                    consume.next().unwrap().1.to_owned();
-                                            }
-                                        }
-                                    }
-                                    FieldSize::Five => {
-                                        for (idx, s) in result.iter().enumerate() {
-                                            *self.board[idx] = s.1.to_owned();
-                                        }
-                                    }
+                                } else {
+                                    self.toasts.dismiss_all_toasts();
+                                    toast_cb(&mut self.toasts.error("Not Enough Samples"));
                                 }
                             }
                             if ui.button("W. Randomize").clicked() {
@@ -471,20 +490,59 @@ impl eframe::App for BingoSyncGen {
                                 }
 
                                 let result = samples.unwrap();
-                                let builder = WalkerTableBuilder::new(
-                                    &result
-                                        .clone()
-                                        .iter()
-                                        .map(|item| item.2 as f32 / 100.0)
-                                        .collect::<Vec<f32>>(),
-                                );
-                                let wa_table = builder.build();
-                                let mut visited: Vec<usize> = vec![];
 
-                                match self.field_size {
-                                    FieldSize::Three => {
-                                        for c in 1..=3 {
-                                            for r in 1..=3 {
+                                if result.len()
+                                    >= (self.field_size as usize * self.field_size as usize)
+                                {
+                                    let builder = WalkerTableBuilder::new(
+                                        &result
+                                            .clone()
+                                            .iter()
+                                            .map(|item| item.2 as f32 / 100.0)
+                                            .collect::<Vec<f32>>(),
+                                    );
+                                    let wa_table = builder.build();
+                                    let mut visited: Vec<usize> = vec![];
+
+                                    match self.field_size {
+                                        FieldSize::Three => {
+                                            for c in 1..=3 {
+                                                for r in 1..=3 {
+                                                    while let idx = wa_table.next_rng(&mut rng) {
+                                                        if visited.contains(&idx) {
+                                                            continue;
+                                                        }
+
+                                                        visited.push(idx);
+
+                                                        *self.board[c * 5 + r] =
+                                                            result[idx].1.to_owned();
+
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        FieldSize::Four => {
+                                            for c in 0..=3 {
+                                                for r in 0..=3 {
+                                                    while let idx = wa_table.next_rng(&mut rng) {
+                                                        if visited.contains(&idx) {
+                                                            continue;
+                                                        }
+
+                                                        visited.push(idx);
+
+                                                        *self.board[c * 5 + r] =
+                                                            result[idx].1.to_owned();
+
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        FieldSize::Five => {
+                                            for e_idx in (0..25) {
                                                 while let idx = wa_table.next_rng(&mut rng) {
                                                     if visited.contains(&idx) {
                                                         continue;
@@ -492,47 +550,16 @@ impl eframe::App for BingoSyncGen {
 
                                                     visited.push(idx);
 
-                                                    *self.board[c * 5 + r] =
-                                                        result[idx].1.to_owned();
+                                                    *self.board[e_idx] = result[idx].1.to_owned();
 
                                                     break;
                                                 }
                                             }
                                         }
                                     }
-                                    FieldSize::Four => {
-                                        for c in 0..=3 {
-                                            for r in 0..=3 {
-                                                while let idx = wa_table.next_rng(&mut rng) {
-                                                    if visited.contains(&idx) {
-                                                        continue;
-                                                    }
-
-                                                    visited.push(idx);
-
-                                                    *self.board[c * 5 + r] =
-                                                        result[idx].1.to_owned();
-
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    FieldSize::Five => {
-                                        for e_idx in (0..25) {
-                                            while let idx = wa_table.next_rng(&mut rng) {
-                                                if visited.contains(&idx) {
-                                                    continue;
-                                                }
-
-                                                visited.push(idx);
-
-                                                *self.board[e_idx] = result[idx].1.to_owned();
-
-                                                break;
-                                            }
-                                        }
-                                    }
+                                } else {
+                                    self.toasts.dismiss_all_toasts();
+                                    toast_cb(&mut self.toasts.error("Not Enough Samples"));
                                 }
                             }
                         });
@@ -628,5 +655,7 @@ impl eframe::App for BingoSyncGen {
                 });
             });
         });
+
+        self.toasts.show(ctx);
     }
 }
