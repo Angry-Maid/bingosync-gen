@@ -1,0 +1,6 @@
+category,text,weight,enabled
+Test1,99,5.0,true
+Test2,100,10.0,true
+,101,50.0,false
+,102,1.0,true
+,103,1.0,true

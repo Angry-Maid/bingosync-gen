@@ -4,15 +4,6 @@
 //! Would I be willing to get help? Yes.
 
 use itertools::Itertools;
-use polars::{
-    datatypes::{AnyValue, DataType},
-    df,
-    io::{
-        csv::{CsvReader, CsvWriter},
-        SerReader, SerWriter,
-    },
-    prelude::Schema,
-};
 use rand::{
     seq::{IteratorRandom, SliceRandom},
     thread_rng,
@@ -23,7 +14,6 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter},
     path::PathBuf,
-    sync::Arc,
 };
 use weighted_rand::builder::*;
 
@@ -75,7 +65,12 @@ impl Default for CardViewer {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-struct CardRow(String, String, f64, bool);
+struct CardRow(
+    #[serde(rename = "category")] String,
+    #[serde(rename = "text")] String,
+    #[serde(rename = "weight")] f64,
+    #[serde(rename = "enabledF")] bool,
+);
 
 impl RowViewer<CardRow> for CardViewer {
     fn num_columns(&mut self) -> usize {
@@ -189,25 +184,15 @@ pub struct BingoSyncGen {
 
     #[serde(skip)]
     card_viewer: CardViewer,
-
-    #[serde(skip)]
-    data_schema: Schema,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
-struct Card {
+struct BingoCard {
     name: String,
 }
 
 impl Default for BingoSyncGen {
     fn default() -> Self {
-        let mut schema = Schema::new();
-
-        schema.with_column("category".into(), DataType::String);
-        schema.with_column("text".into(), DataType::String);
-        schema.with_column("weight".into(), DataType::Float64);
-        schema.with_column("enabled".into(), DataType::Boolean);
-
         Self {
             selected_panel: MainPanel::default(),
             board: core::array::from_fn(|_idx| Box::new(String::from(""))),
@@ -218,7 +203,6 @@ impl Default for BingoSyncGen {
             card_table_data: Default::default(),
             card_table: Default::default(),
             card_viewer: CardViewer::default(),
-            data_schema: schema,
         }
     }
 }
@@ -278,7 +262,7 @@ impl eframe::App for BingoSyncGen {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.generated = serde_json::to_string_pretty(&self.board.clone().map(|item| Card {
+        self.generated = serde_json::to_string_pretty(&self.board.clone().map(|item| BingoCard {
             name: *item.to_owned(),
         }))
         .unwrap();
@@ -344,7 +328,7 @@ impl eframe::App for BingoSyncGen {
                                     let mut writer = BufWriter::new(file);
                                     serde_json::to_writer_pretty(
                                         &mut writer,
-                                        &self.board.clone().map(|item| Card {
+                                        &self.board.clone().map(|item| BingoCard {
                                             name: *item.to_owned(),
                                         }),
                                     )
@@ -578,44 +562,13 @@ impl eframe::App for BingoSyncGen {
                             if let Some(path) = save_path {
                                 let file = File::open(path).unwrap();
                                 let reader = BufReader::new(file);
-                                let mut dataset = CsvReader::new(reader)
-                                    .has_header(true)
-                                    .with_dtypes(Some(Arc::new(self.data_schema.clone())))
-                                    .finish()
-                                    .unwrap();
-                                dataset.as_single_chunk_par();
-                                let mut iters =
-                                    dataset.iter().map(|s| s.iter()).collect::<Vec<_>>();
+                                let mut dataset = csv::Reader::from_reader(reader);
 
                                 let mut data: Vec<CardRow> = Vec::new();
 
-                                for row in 0..dataset.height() {
-                                    let mut collector: Vec<AnyValue> = Vec::new();
-                                    for iter in &mut iters {
-                                        collector.push(iter.next().unwrap());
-                                    }
-                                    data.push(CardRow {
-                                        0: if let AnyValue::String(v) = collector[0] {
-                                            String::from(v)
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                        1: if let AnyValue::String(v) = collector[1] {
-                                            String::from(v)
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                        2: if let AnyValue::Float64(v) = collector[2] {
-                                            v
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                        3: if let AnyValue::Boolean(v) = collector[3] {
-                                            v
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                    })
+                                for result in dataset.deserialize() {
+                                    let record: CardRow = result.unwrap();
+                                    data.push(record);
                                 }
 
                                 self.card_table.extend(data);
@@ -630,44 +583,13 @@ impl eframe::App for BingoSyncGen {
                             if let Some(path) = save_path {
                                 let file = File::open(path).unwrap();
                                 let reader = BufReader::new(file);
-                                let mut dataset = CsvReader::new(reader)
-                                    .has_header(true)
-                                    .with_dtypes(Some(Arc::new(self.data_schema.clone())))
-                                    .finish()
-                                    .unwrap();
-                                dataset.as_single_chunk_par();
-                                let mut iters =
-                                    dataset.iter().map(|s| s.iter()).collect::<Vec<_>>();
+                                let mut dataset = csv::Reader::from_reader(reader);
 
                                 let mut data: Vec<CardRow> = Vec::new();
 
-                                for row in 0..dataset.height() {
-                                    let mut collector: Vec<AnyValue> = Vec::new();
-                                    for iter in &mut iters {
-                                        collector.push(iter.next().unwrap());
-                                    }
-                                    data.push(CardRow {
-                                        0: if let AnyValue::String(v) = collector[0] {
-                                            String::from(v)
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                        1: if let AnyValue::String(v) = collector[1] {
-                                            String::from(v)
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                        2: if let AnyValue::Float64(v) = collector[2] {
-                                            v
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                        3: if let AnyValue::Boolean(v) = collector[3] {
-                                            v
-                                        } else {
-                                            panic!("panik!");
-                                        },
-                                    })
+                                for result in dataset.deserialize() {
+                                    let record: CardRow = result.unwrap();
+                                    data.push(record);
                                 }
 
                                 self.card_table.replace(data);
@@ -680,35 +602,14 @@ impl eframe::App for BingoSyncGen {
                                 .save_file();
 
                             if let Some(path) = save_path {
-                                let mut file = File::create(path).unwrap();
+                                let mut writer = csv::Writer::from_path(path).unwrap();
 
-                                {
-                                    let categories: Vec<String> = self
-                                        .card_table
-                                        .iter()
-                                        .map(|item| item.0.to_owned())
-                                        .collect();
-                                    let texts: Vec<String> = self
-                                        .card_table
-                                        .iter()
-                                        .map(|item| item.1.to_owned())
-                                        .collect();
-                                    let weights: Vec<f64> =
-                                        self.card_table.iter().map(|item| item.2).collect();
-                                    let enables: Vec<bool> =
-                                        self.card_table.iter().map(|item| item.3).collect();
+                                writer
+                                    .write_record(&["category", "text", "weight", "enabled"])
+                                    .unwrap(); // Header
 
-                                    CsvWriter::new(&mut file)
-                                        .finish(
-                                            &mut df!(
-                                                "category" => &categories,
-                                                "text" => &texts,
-                                                "weight" => &weights,
-                                                "enabled" => &enables
-                                            )
-                                            .unwrap(),
-                                        )
-                                        .unwrap();
+                                for record in self.card_table.iter() {
+                                    writer.serialize(record).unwrap();
                                 }
                             }
                         }
