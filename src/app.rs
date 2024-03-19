@@ -275,7 +275,11 @@ impl eframe::App for BingoSyncGen {
         };
 
         self.generated = serde_json::to_string_pretty(&self.board.clone().map(|item| BingoCard {
-            name: *item.to_owned(),
+            name: if item.is_empty() {
+                " ".to_owned()
+            } else {
+                *item.to_owned()
+            },
         }))
         .unwrap();
 
@@ -341,7 +345,11 @@ impl eframe::App for BingoSyncGen {
                                     serde_json::to_writer_pretty(
                                         &mut writer,
                                         &self.board.clone().map(|item| BingoCard {
-                                            name: *item.to_owned(),
+                                            name: if item.is_empty() {
+                                                " ".to_owned()
+                                            } else {
+                                                *item.to_owned()
+                                            },
                                         }),
                                     )
                                     .unwrap();
